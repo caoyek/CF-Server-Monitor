@@ -84,11 +84,7 @@ export async function initDatabase(db) {
       )
     `).run();
 
-    await db.prepare(`DROP INDEX IF EXISTS idx_history_server_time`).run();
-    await db.prepare(`
-      CREATE INDEX IF NOT EXISTS idx_history_server_time 
-      ON metrics_history(server_id, timestamp)
-    `).run();
+    await ensureHistoryIndex(db);
 
     debug('✅ 数据库初始化完成');
     dbInitialized = true;
@@ -199,12 +195,6 @@ export async function getMetricsHistory(db, serverId, hours, columns) {
   if (needOldTable && oldTableExists) {
     // 跨月查询，使用 UNION ALL
     debug('[History] 跨月查询，合并 metrics_history 和 metrics_history_old');
-    
-    // 创建索引，加速查询
-    await db.prepare(`
-      CREATE INDEX idx_history_server_old_time
-      ON metrics_history_old(server_id, timestamp)
-    `).run();
 
     rawResult = await db.prepare(`
       WITH sampled AS (
@@ -300,8 +290,6 @@ export async function monthlyCleanup(db) {
       await db.prepare(`ALTER TABLE metrics_history RENAME TO metrics_history_old`).run();
       debug('[Cleanup] 已将 metrics_history 重命名为 metrics_history_old');
     }
-
-    await db.prepare(`DROP INDEX IF EXISTS idx_history_server_time`).run();
     
     // 3. 重新初始化数据库以创建新的 metrics_history 表
     dbInitialized = false;

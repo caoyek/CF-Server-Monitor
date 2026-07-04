@@ -2,7 +2,16 @@
 
 一个基于 Cloudflare Workers + D1 + Durable Objects 的多服务器监控探针系统，支持实时监控、历史数据查看、延迟追踪、地图展示等功能。兼容主流Linux系统，Alpine Linux，OpenWrt，Windows系统。**演示地址**：<https://demo.huilang.me/>
 
-**当前版本：V2.7.7**
+**当前版本：V2.7.8**
+
+> [!IMPORTANT]
+> **🚨 紧急安全/性能更新 (v2.7.8)**
+> 
+> 本次版本修复了 **月度任务导致数据表索引丢失** 的严重 Bug。该问题影响 **v2.7.0 ~ v2.7.7** 所有版本。
+> 
+> ⚠️ **潜在影响**：此 Bug 会严重增加 D1 读行消耗，**可能导致免费额度超限，造成服务不可用**。
+> 
+> **👉 请所有用户务必立即升级！**
 
 <2.7.1 新增了功能，需要**升级安装脚本** 才能生效，否则无法获取丢包率
 ```
@@ -27,6 +36,7 @@ cat /etc/config/cf-probe/config.conf
 <details>
 <summary>更新记录</summary>
 
+- V2.7.8 修复月度任务导致数据表索引丢失的严重 Bug
 - V2.7.7 添加GitHub Page部署支持，添加飞书，Bark通知支持
 - V2.7.6 添加多站点支持包括验证码登录等，添加Windows PowerShell无依赖安装脚本，一些安全优化
 - V2.7.5 DO WebSocket改成 DO WebSocket Hibernation基本剔除DO Duration消耗，新增批量推送入口，每5秒批量接收多个服务器更新，减少 DO 请求次数。

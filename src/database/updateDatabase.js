@@ -19,9 +19,6 @@ export async function updateDatabase(db) {
     results.push({ name: 'metrics_history 表列更新', ...historyCols });
 
     // 无需清理metrics_history多余字段，消耗过大，不影响使用，每月执行monthlyCleanup的时候会自动清理
-
-    const historyRowid = await optimizeMetricsHistoryRowid(db);
-    results.push({ name: 'metrics_history 写入优化', ...historyRowid });
     
     const staleCleanup = await cleanupStaleSettings(db);
     results.push({ name: '废弃 settings key 清理', ...staleCleanup });
@@ -47,20 +44,21 @@ export async function updateDatabase(db) {
   }
 }
 
-// 确保 metrics_history 表有 idx_history_server_time 索引
+// 确保 metrics_history 表有 索引
 export async function ensureHistoryIndex(db) {
   try {
     const index = await db.prepare(
-      `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='metrics_history' AND name='idx_history_server_time'`
+      `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='metrics_history'`
     ).first();
 
     if (index) {
       return { success: true, created: false, message: '索引已存在' };
     }
 
-    await db.prepare(`DROP INDEX IF EXISTS idx_history_server_time`).run();
+    const idxName = 'idx_history_server_time_' + Math.random().toString(36).substring(2);
+    await db.prepare(`DROP INDEX IF EXISTS ${idxName}`).run();
     await db.prepare(`
-      CREATE INDEX idx_history_server_time
+      CREATE INDEX IF NOT EXISTS ${idxName} 
       ON metrics_history(server_id, timestamp)
     `).run();
 
@@ -190,122 +188,6 @@ export async function addHistoryColumns(db) {
     return { success: true, added };
   } catch (e) {
     console.error('添加 metrics_history 表列失败:', e);
-    return { success: false, error: e.message };
-  }
-}
-
-async function optimizeMetricsHistoryRowid(db) {
-  try {
-    const table = await db.prepare(
-      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'metrics_history'`
-    ).first();
-
-    if (!table || !table.sql) {
-      return { success: true, optimized: 0, message: 'metrics_history 表不存在' };
-    }
-
-    if (!/AUTOINCREMENT/i.test(table.sql)) {
-      await db.prepare(`
-        CREATE INDEX IF NOT EXISTS idx_history_server_time
-        ON metrics_history(server_id, timestamp)
-      `).run();
-      return { success: true, optimized: 0, message: '已是优化结构' };
-    }
-
-    const oldTable = await db.prepare(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'metrics_history_old'`
-    ).first();
-    if (oldTable) {
-      return { success: false, error: '检测到上次迁移遗留的 metrics_history_old，请先人工确认后处理' };
-    }
-
-    await db.prepare(`DROP INDEX IF EXISTS idx_history_server_time`).run();
-    await db.prepare(`DROP TABLE IF EXISTS metrics_history_new`).run();
-    await db.prepare(`
-      CREATE TABLE metrics_history_new (
-        id INTEGER PRIMARY KEY,
-        server_id TEXT NOT NULL,
-        timestamp INTEGER DEFAULT 0,
-        cpu REAL DEFAULT 0,
-        load_avg TEXT DEFAULT '0',
-        net_in_speed REAL DEFAULT 0,
-        net_out_speed REAL DEFAULT 0,
-        net_rx REAL DEFAULT 0,
-        net_tx REAL DEFAULT 0,
-        processes INTEGER DEFAULT 0,
-        tcp_conn INTEGER DEFAULT 0,
-        udp_conn INTEGER DEFAULT 0,
-        ping_ct INTEGER DEFAULT 0,
-        ping_cu INTEGER DEFAULT 0,
-        ping_cm INTEGER DEFAULT 0,
-        ping_bd INTEGER DEFAULT 0,
-        loss_ct INTEGER DEFAULT NULL,
-        loss_cu INTEGER DEFAULT NULL,
-        loss_cm INTEGER DEFAULT NULL,
-        loss_bd INTEGER DEFAULT NULL,
-        ram_total REAL DEFAULT 0,
-        ram_used REAL DEFAULT 0,
-        swap_total REAL DEFAULT 0,
-        swap_used REAL DEFAULT 0,
-        disk_total REAL DEFAULT 0,
-        disk_used REAL DEFAULT 0,
-        cpu_cores INTEGER DEFAULT 0,
-        cpu_info TEXT DEFAULT '',
-        gpu REAL DEFAULT NULL,
-        gpu_info TEXT DEFAULT '',
-        arch TEXT DEFAULT '',
-        os TEXT DEFAULT '',
-        region TEXT DEFAULT '',
-        ip_v4 TEXT DEFAULT '0',
-        ip_v6 TEXT DEFAULT '0',
-        boot_time TEXT DEFAULT '',
-        net_rx_monthly REAL DEFAULT 0,
-        net_tx_monthly REAL DEFAULT 0
-      )
-    `).run();
-
-    const { results: historyColumns } = await db.prepare(`PRAGMA table_info(metrics_history)`).all();
-    const existingHistoryCols = new Set(historyColumns.map(c => c.name));
-    const historySelectExpr = (colName, fallback) => (
-      existingHistoryCols.has(colName) ? `COALESCE(${colName}, ${fallback})` : fallback
-    );
-
-    await db.prepare(`
-      INSERT INTO metrics_history_new (
-        id, server_id, timestamp, cpu, load_avg,
-        net_in_speed, net_out_speed, net_rx, net_tx,
-        processes, tcp_conn, udp_conn,
-        ping_ct, ping_cu, ping_cm, ping_bd,
-        loss_ct, loss_cu, loss_cm, loss_bd,
-        ram_total, ram_used, swap_total, swap_used,
-        disk_total, disk_used,
-        cpu_cores, cpu_info, gpu, gpu_info, arch, os, region, ip_v4, ip_v6, boot_time,
-      net_rx_monthly, net_tx_monthly
-    )
-    SELECT
-      id, server_id, timestamp, cpu, load_avg,
-      net_in_speed, net_out_speed, net_rx, net_tx,
-      processes, tcp_conn, udp_conn,
-      ping_ct, ping_cu, ping_cm, ping_bd,
-      ${historySelectExpr('loss_ct', 'NULL')}, ${historySelectExpr('loss_cu', 'NULL')}, ${historySelectExpr('loss_cm', 'NULL')}, ${historySelectExpr('loss_bd', 'NULL')},
-      ram_total, ram_used, swap_total, swap_used,
-      disk_total, disk_used,
-      cpu_cores, cpu_info, ${historySelectExpr('gpu', 'NULL')}, ${historySelectExpr('gpu_info', "''")}, arch, os, ${historySelectExpr('region', "''")}, ip_v4, ip_v6, boot_time,
-        ${historySelectExpr('net_rx_monthly', '0')}, ${historySelectExpr('net_tx_monthly', '0')}
-      FROM metrics_history
-    `).run();
-
-    await db.prepare(`ALTER TABLE metrics_history RENAME TO metrics_history_old`).run();
-    await db.prepare(`ALTER TABLE metrics_history_new RENAME TO metrics_history`).run();
-    await db.prepare(`
-      CREATE INDEX IF NOT EXISTS idx_history_server_time
-      ON metrics_history(server_id, timestamp)
-    `).run();
-    await db.prepare(`DROP TABLE metrics_history_old`).run();
-
-    return { success: true, optimized: 1, message: '已移除 AUTOINCREMENT，降低上报写入放大' };
-  } catch (e) {
-    console.error('优化 metrics_history 写入结构失败:', e);
     return { success: false, error: e.message };
   }
 }
